@@ -1,11 +1,58 @@
 package it.polito.library;
 
-import java.util.Map;
-import java.util.Set;
-import java.util.SortedMap;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.util.*;
+import java.util.stream.*;
 
 
 public class LibraryManager {
+
+	private static class Book {
+		String id;
+		String title;
+		boolean rented = false;
+
+		public Book(String id, String title) {
+			this.id = id;
+			this.title = title;
+		}
+	}
+
+	private static class Person {
+		String id;
+		String firstName;
+		String lastName;
+		boolean rents = false;
+
+		public Person(String id, String firstName, String lastName) {
+			this.id = id;
+			this.firstName = firstName;
+			this.lastName = lastName;
+		}
+	}
+
+	private static class Rental {
+		String bookId;
+		String readerId;
+		LocalDate startingDate;
+		LocalDate endingDate = null;
+
+		public Rental(String bookId, String readerId, LocalDate startingDate) {
+			this.bookId = bookId;
+			this.readerId = readerId;
+			this.startingDate = startingDate;
+		}
+	}
+
+	private final static DateTimeFormatter LIB_FORMATTER = DateTimeFormatter.ofPattern("dd-MM-yyyy");
+
+	private Integer nextBookId = 1000;
+	private Integer nextReaderId = 1000;
+	private Map<String, Collection<Book>> books = new HashMap<>();
+	private Map<String, Book> copies = new HashMap<>();
+	private Map<String, Person> readers = new HashMap<>();
+	private Map<String, Collection<Rental>> rentals = new HashMap<>();
 	    
     // R1: Readers and Books 
     
@@ -19,7 +66,17 @@ public class LibraryManager {
 	 * @return the ID of the book added 
 	 */
     public String addBook(String title) {
-        return null;
+		books.computeIfAbsent(title, (key) -> new ArrayList<>());
+
+		String id = nextBookId.toString();
+		nextBookId++;
+
+		Book book = new Book(id, title);
+		books.get(title).add(book);
+		copies.put(id, book);
+		rentals.put(id, new ArrayList<>());
+
+		return id;
     }
     
     /**
@@ -29,8 +86,15 @@ public class LibraryManager {
 	 * 
 	 * @return a map of the titles liked to the number of available copies
 	 */
-    public SortedMap<String, Integer> getTitles() {    	
-        return null;
+    public SortedMap<String, Integer> getTitles() {
+    	return books.entrySet().stream()
+			.sorted(Comparator.comparing(Map.Entry::getKey))
+			.collect(Collectors.toMap(
+				Map.Entry::getKey,
+				(entry) -> entry.getValue().size(),
+				(v, w) -> v,
+				TreeMap::new
+			));
     }
     
     /**
@@ -38,8 +102,11 @@ public class LibraryManager {
 	 * 
 	 * @return a set of the titles liked to the number of available copies
 	 */
-    public Set<String> getBooks() {    	    	
-        return null;
+    public Set<String> getBooks() {
+        return books.values().stream()
+			.flatMap(Collection::stream)
+			.map((book) -> book.id)
+			.collect(Collectors.toSet());
     }
     
     /**
@@ -49,6 +116,10 @@ public class LibraryManager {
 	 * @param surname last name of the reader
 	 */
     public void addReader(String name, String surname) {
+		String id = nextReaderId.toString();
+		nextReaderId++;
+
+		readers.put(id, new Person(id, name, surname));
     }
     
     
@@ -60,7 +131,12 @@ public class LibraryManager {
 	 * @throws LibException if the readerID is not present in the archive
 	 */
     public String getReaderName(String readerID) throws LibException {
-        return null;
+        Person reader = readers.get(readerID);
+		if (reader == null) {
+			throw new LibException("Reader not present");
+		}
+
+		return String.format("%s %s", reader.firstName, reader.lastName);
     }    
     
     
@@ -75,9 +151,18 @@ public class LibraryManager {
 	 * @throws LibException  an exception if the book is not present in the archive
 	 */
     public String getAvailableBook(String bookTitle) throws LibException {
-        return null;
-    }   
-
+		Collection<Book> book = books.get(bookTitle);
+		if (book == null) {
+			throw new LibException("Book not present");
+		}
+		
+		return book.stream()
+			.filter((copy) -> !copy.rented)
+			.map((copy) -> copy.id)
+			.findAny()
+			.orElse("Not available");
+    }
+	
     /**
 	 * Starts a rental of a specific book copy for a specific reader
 	 * 
@@ -88,6 +173,20 @@ public class LibraryManager {
 	 * if the reader is already renting a book, or if the book copy is already rented
 	 */
 	public void startRental(String bookID, String readerID, String startingDate) throws LibException {
+		Book book = copies.get(bookID);
+		Person reader = readers.get(readerID);
+		
+		if (book == null || reader == null) {
+			throw new LibException("Either book or reader isn't present in the archive");
+		}
+
+		if (reader.rents || book.rented) {
+			throw new LibException("Either book is rented or reader already rents");
+		}
+
+		rentals.get(bookID).add(new Rental(bookID, readerID, LocalDate.parse(startingDate, LIB_FORMATTER)));
+		book.rented = true;
+		reader.rents = true;
     }
     
 	/**
@@ -100,6 +199,16 @@ public class LibraryManager {
 	 * if the reader is not renting a book, or if the book copy is not rented
 	 */
     public void endRental(String bookID, String readerID, String endingDate) throws LibException {
+		Book book = copies.get(bookID);
+		Person reader = readers.get(readerID);
+
+		Rental rental = rentals.get(bookID).stream()
+			.filter((r) -> r.endingDate == null)
+			.findAny()
+			.get();
+		rental.endingDate = LocalDate.parse(endingDate, LIB_FORMATTER);
+		book.rented = false;
+		reader.rents = false;
     }
     
     
@@ -113,7 +222,23 @@ public class LibraryManager {
 	* if the reader is not renting a book, or if the book copy is not rented
 	*/
     public SortedMap<String, String> getRentals(String bookID) throws LibException {
-        return null;
+		SortedMap<String,String> rentalInfo = new TreeMap<>();
+		Collection<Rental> bookRentals = rentals.get(bookID);
+
+		if (bookRentals == null) {
+			throw new LibException("No such book");
+		}
+
+		for (Rental rental : bookRentals) {
+			String startingDate = rental.startingDate.format(LIB_FORMATTER);
+			String endingDate = rental.endingDate != null
+				? rental.endingDate.format(LIB_FORMATTER)
+				: "ONGOING";
+			
+			rentalInfo.put(rental.readerId, String.format("%s %s", startingDate, endingDate));
+		}
+
+		return rentalInfo;
     }
     
     
